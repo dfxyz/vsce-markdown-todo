@@ -4,18 +4,27 @@
   "description": "A simple TODO management VSCode extension for Markdown files.",
   "version": "0.1.0",
   "engines": {
-    "vscode": "*"
+    "vscode": "^1.99.0"
   },
   "categories": [
     "Other"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onLanguage:markdown"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
       {
-        "command": "markdown-todo.helloWorld",
-        "title": "Hello World"
+        "command": "markdown-todo.cycleTodoState",
+        "title": "Cycle TODO state"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "markdown-todo.cycleTodoState",
+        "key": "ctrl+alt+d",
+        "when": "editorTextFocus && editorLangId == markdown && !editorReadonly"
       }
     ]
   },
