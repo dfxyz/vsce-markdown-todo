@@ -18,12 +18,21 @@
       {
         "command": "markdown-todo.cycleTodoState",
         "title": "Cycle TODO state"
+      },
+      {
+        "command": "markdown-todo.cycleTodoStateBackward",
+        "title": "Cycle TODO state backward"
       }
     ],
     "keybindings": [
       {
         "command": "markdown-todo.cycleTodoState",
-        "key": "ctrl+alt+d",
+        "key": "ctrl+alt+j",
+        "when": "editorTextFocus && editorLangId == markdown && !editorReadonly"
+      },
+      {
+        "command": "markdown-todo.cycleTodoStateBackward",
+        "key": "ctrl+alt+k",
         "when": "editorTextFocus && editorLangId == markdown && !editorReadonly"
       }
     ]
