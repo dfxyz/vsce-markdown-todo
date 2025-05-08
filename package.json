@@ -3,6 +3,10 @@
   "displayName": "Markdown TODO",
   "description": "A simple TODO management VSCode extension for Markdown files.",
   "version": "0.1.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dfxyz/vsce-markdown-todo"
+  },
   "engines": {
     "vscode": "^1.99.0"
   },
