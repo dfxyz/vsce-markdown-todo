@@ -2,7 +2,8 @@
   "name": "markdown-todo",
   "displayName": "Markdown TODO",
   "description": "A simple TODO management VSCode extension for Markdown files.",
-  "version": "0.1.0",
+  "publisher": "dfxyz",
+  "version": "0.1.1",
   "repository": {
     "type": "git",
     "url": "https://github.com/dfxyz/vsce-markdown-todo"
@@ -18,6 +19,53 @@
   ],
   "main": "./out/extension.js",
   "contributes": {
+    "configuration": {
+      "title": "Markdown TODO",
+      "properties": {
+        "markdown-todo.keywords": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "keyword": {
+                "type": "string",
+                "description": "The keyword for a TODO state"
+              },
+              "color": {
+                "type": ["string", "null"],
+                "description": "The foreground color for the keyword. May be null.",
+                "default": null
+              },
+              "backgroundColor": {
+                "type": ["string", "null"],
+                "description": "The background color for the keyword. May be null.",
+                "default": null
+              },
+              "bold": {
+                "type": "boolean",
+                "description": "Whether the keyword should be rendered in bold font weight.",
+                "default": true
+              }
+            },
+            "required": ["keyword"]
+          },
+          "default": [
+            {
+              "keyword": "TODO",
+              "color": "#C05430",
+              "backgroundColor": null,
+              "bold": true
+            },
+            {
+              "keyword": "DONE",
+              "color": "#008020",
+              "backgroundColor": null,
+              "bold": true
+            }
+          ]
+        }
+      }
+    },
     "commands": [
       {
         "command": "markdown-todo.cycleTodoState",
