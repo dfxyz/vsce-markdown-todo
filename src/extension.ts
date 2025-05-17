@@ -1,271 +1,203 @@
-import * as vscode from "vscode";
+// noinspection JSUnusedGlobalSymbols
 
-type KeywordConfig = {
-  keyword: string;
-  color?: string | null;
-  backgroundColor?: string | null;
-  bold?: boolean;
-};
+import * as vscode from 'vscode';
+import {
+  COMMAND_CYCLE_TODO_STATE,
+  COMMAND_CYCLE_TODO_STATE_BACKWARD,
+  CONFIG_SECTION,
+  CYCLABLE_LINE_REGEX,
+  EXTENSION_NAME,
+} from './constants';
+import { DocumentInfo, KeywordConfiguration } from './utils';
 
-const LINE_REGEX = /^((#{1,6}|\s*[-+*])\s+)(.*)$/;
-const DEFAULT_KEYWORD_CONFIGS: KeywordConfig[] = [
-  {
-    keyword: "TODO",
-    color: "#C05430",
-    backgroundColor: null,
-    bold: true,
-  },
-  {
-    keyword: "DONE",
-    color: "#008020",
-    backgroundColor: null,
-    bold: true,
-  },
-];
-
-const KEYWORD_CONFIGS: KeywordConfig[] = [];
-const DECORATION_MAP: Map<string, vscode.TextEditorDecorationType> = new Map();
-let DECORATE_REGEX: RegExp | null = null;
-let DECORATED_EDITORS = new WeakSet<vscode.TextEditor>(); // rebuild on visible text editor change
+let defaultKeywordConfiguration: KeywordConfiguration;
+const documentInfoMap = new WeakMap<vscode.TextDocument, DocumentInfo>();
+const decoratedEditors = new WeakSet<vscode.TextEditor>();
 
 export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
+    vscode.commands.registerCommand(COMMAND_CYCLE_TODO_STATE, () => {
+      cycleTodoState(true);
+    }),
+    vscode.commands.registerCommand(COMMAND_CYCLE_TODO_STATE_BACKWARD, () => {
+      cycleTodoState(false);
+    }),
     vscode.workspace.onDidChangeConfiguration((event) => {
-      handleConfigurationChange(event);
+      onConfigurationChanged(event);
     }),
-  );
-  context.subscriptions.push(
-    vscode.commands.registerCommand(
-      "markdown-todo.cycleTodoState",
-      cycleTodoState,
-    ),
-  );
-  context.subscriptions.push(
-    vscode.commands.registerCommand(
-      "markdown-todo.cycleTodoStateBackward",
-      () => cycleTodoState(false),
-    ),
-  );
-  context.subscriptions.push(
+    vscode.workspace.onDidOpenTextDocument((doc) => {
+      onOpenTextDocument(doc);
+    }),
+    vscode.workspace.onDidCloseTextDocument((doc) => {
+      onCloseTextDocument(doc);
+    }),
     vscode.workspace.onDidChangeTextDocument((event) => {
-      updateDecorationOnDocumentTextChange(event);
+      onTextDocumentChanged(event);
     }),
-  );
-  context.subscriptions.push(
     vscode.window.onDidChangeVisibleTextEditors((editors) => {
-      updateDecorationOnVisibleTextEditorChange(editors);
+      onVisibleTextEditorsChanged(editors);
     }),
   );
 
-  loadConfigurationAndUpdateDecoration();
-}
-
-export function deactivate() {}
-
-function loadConfigurationAndUpdateDecoration() {
-  const configuration = vscode.workspace.getConfiguration("markdown-todo");
-  const keywordConfigs = configuration.get<KeywordConfig[]>("keywords") ??
-    DEFAULT_KEYWORD_CONFIGS;
-  if (keywordConfigs.length <= 0) {
-    vscode.window.showErrorMessage("Markdown TODO: no keyword configured.");
-    return;
-  }
-
-  const keywordSet = new Set();
-  for (const item of keywordConfigs) {
-    item.keyword = item.keyword.trim();
-    item.color = item.color ?? null;
-    item.backgroundColor = item.backgroundColor ?? null;
-    item.bold = item.bold ?? true;
-
-    if (item.keyword.length <= 0) {
-      vscode.window.showErrorMessage(
-        "Markdown TODO: one of the keywords is empty or whitespace.",
-      );
-      return;
-    }
-    if (keywordSet.has(item.keyword)) {
-      vscode.window.showErrorMessage(
-        "Markdown TODO: one of the keywords is duplicated.",
-      );
-    }
-    keywordSet.add(item.keyword);
-  }
-  KEYWORD_CONFIGS.splice(0, KEYWORD_CONFIGS.length);
-  KEYWORD_CONFIGS.push(...keywordConfigs);
-
-  for (const oldDecoration of DECORATION_MAP.values()) {
-    oldDecoration.dispose();
-  }
-  DECORATION_MAP.clear();
-  for (const config of KEYWORD_CONFIGS) {
-    const options: vscode.DecorationRenderOptions = {};
-    if (config.color !== null) {
-      options.color = config.color;
-    }
-    if (config.backgroundColor !== null) {
-      options.backgroundColor = config.backgroundColor;
-    }
-    if (config.bold) {
-      options.fontWeight = "bold";
-    }
-    DECORATION_MAP.set(
-      config.keyword,
-      vscode.window.createTextEditorDecorationType(options),
-    );
-  }
-
-  const regexString = "^((#{1,6}|\\s*[-+*])\\s+)(" +
-    KEYWORD_CONFIGS.map((item) => {
-      // escape regex special characters
-      return item.keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    }).join("|") + ")\\s+.*$";
-  DECORATE_REGEX = new RegExp(regexString);
-
-  for (const editor of vscode.window.visibleTextEditors) {
-    updateDecoration(editor);
+  defaultKeywordConfiguration = KeywordConfiguration.loadFromWorkspace();
+  for (const doc of vscode.workspace.textDocuments) {
+    onOpenTextDocument(doc);
   }
 }
 
-function hasValidConfiguration(): boolean {
-  return KEYWORD_CONFIGS.length > 0;
+export function deactivate() {
+  // do nothing
 }
 
-function handleConfigurationChange(event: vscode.ConfigurationChangeEvent) {
-  if (event.affectsConfiguration("markdown-todo.keywords")) {
-    loadConfigurationAndUpdateDecoration();
-  }
-}
-
-function cycleTodoState(cycleForward = true) {
+/**
+ * If the cursor line of the active editor is a markdown heading or unordered list item,
+ * cycle the TODO state of it.
+ * @param cycleForward The direction to cycling.
+ */
+function cycleTodoState(cycleForward: boolean) {
   const editor = vscode.window.activeTextEditor;
   if (!editor) {
-    vscode.window.showErrorMessage("No active text editor.");
+    // noinspection JSIgnoredPromiseFromCall
+    vscode.window.showWarningMessage(`${EXTENSION_NAME}: no active text editor.`);
     return;
   }
-
-  const document = editor.document;
-  if (document.languageId !== "markdown") {
-    vscode.window.showErrorMessage("Only supported in markdown files.");
+  const doc = editor.document;
+  const docInfo = documentInfoMap.get(doc);
+  if (docInfo === undefined) {
+    // noinspection JSIgnoredPromiseFromCall
+    vscode.window.showWarningMessage(`${EXTENSION_NAME}: not a markdown document.`);
     return;
   }
-
-  if (!hasValidConfiguration()) {
-    vscode.window.showErrorMessage(
-      "Markdown TODO is not initialized properly.",
-    );
+  const keywords = docInfo.keywordConfiguration.keywords;
+  const cursorLineNumber = editor.selection.active.line;
+  const cursorLineText = doc.lineAt(cursorLineNumber).text;
+  const match = cursorLineText.match(CYCLABLE_LINE_REGEX);
+  if (!match) {
+    // noinspection JSIgnoredPromiseFromCall
+    vscode.window.showWarningMessage(`${EXTENSION_NAME}: not supported in current line.`);
     return;
   }
-
-  const line = editor.document.lineAt(editor.selection.active.line);
-  const text = line.text;
-
-  const match = text.match(LINE_REGEX);
-  if (match === null) {
-    vscode.window.showErrorMessage("Not supported in current context.");
-    return;
-  }
-  const punctPart = match[2] + " ";
-  const textPart = match[3];
-
-  const todoKeywords = KEYWORD_CONFIGS.map((item) => item.keyword);
-  let remainingTextPart = textPart.trim();
-  let currentKeywordIndex = cycleForward ? -1 : todoKeywords.length;
-  for (const [i, v] of Object.entries(todoKeywords)) {
-    if (textPart.startsWith(v + " ")) {
-      currentKeywordIndex = Number(i);
-      remainingTextPart = textPart.slice(v.length).trim();
+  const punctuationPart = match[2] + ' ';
+  let textPart = match[3];
+  let index: number | undefined;
+  for (const [i, v] of keywords.entries()) {
+    if (textPart.startsWith(v + ' ')) {
+      index = i;
+      textPart = textPart.slice(v.length + 1).trim();
       break;
     }
   }
-  const nextKeywordIndex = currentKeywordIndex += cycleForward ? 1 : -1;
-  let keywordPart = todoKeywords[nextKeywordIndex] ?? "";
-  if (keywordPart !== "") {
-    keywordPart += " ";
+  if (index === undefined) {
+    index = cycleForward ? 0 : keywords.length - 1;
+  } else {
+    index += cycleForward ? 1 : -1;
   }
-
-  const newLine = `${punctPart}${keywordPart}${remainingTextPart}`;
+  let keywordPart = keywords[index] ?? '';
+  if (keywordPart !== '') {
+    keywordPart += ' ';
+  }
+  const newLineText = `${punctuationPart}${keywordPart}${textPart}`;
+  // noinspection JSIgnoredPromiseFromCall
   editor.edit((editBuilder) => {
-    const range = new vscode.Range(
-      line.lineNumber,
-      0,
-      line.lineNumber,
-      line.text.length,
-    );
-    editBuilder.replace(range, newLine);
+    editBuilder.replace(new vscode.Range(cursorLineNumber, 0, cursorLineNumber, cursorLineText.length), newLineText);
   });
 }
 
-function updateDecorationOnDocumentTextChange(
-  event: vscode.TextDocumentChangeEvent,
-) {
-  if (!hasValidConfiguration()) {
+function onConfigurationChanged(event: vscode.ConfigurationChangeEvent) {
+  if (!event.affectsConfiguration(CONFIG_SECTION)) {
     return;
   }
+  const keywordConfiguration = KeywordConfiguration.loadFromWorkspace();
+  if (!keywordConfiguration.equals(defaultKeywordConfiguration)) {
+    const oldDefaultConfiguration = defaultKeywordConfiguration;
+    oldDefaultConfiguration.dispose();
+    defaultKeywordConfiguration = keywordConfiguration;
+    for (const doc of vscode.workspace.textDocuments) {
+      const docInfo = documentInfoMap.get(doc);
+      if (docInfo === undefined || docInfo.keywordConfiguration === oldDefaultConfiguration) {
+        onOpenTextDocument(doc);
+      }
+    }
+  }
+}
+
+function onOpenTextDocument(doc: vscode.TextDocument) {
+  if (doc.languageId !== 'markdown') {
+    return;
+  }
+  const docInfo = new DocumentInfo(doc, defaultKeywordConfiguration);
+  documentInfoMap.set(doc, docInfo);
   for (const editor of vscode.window.visibleTextEditors) {
-    if (editor.document === event.document) {
-      updateDecoration(editor);
+    if (editor.document === doc) {
+      docInfo.decorateEditor(editor);
+      decoratedEditors.add(editor);
     }
   }
 }
 
-function updateDecorationOnVisibleTextEditorChange(
-  editors: readonly vscode.TextEditor[],
-) {
-  if (!hasValidConfiguration()) {
+function onCloseTextDocument(doc: vscode.TextDocument) {
+  if (doc.languageId !== 'markdown') {
     return;
   }
-
-  const newDecoratedSet = new WeakSet();
-  const notDecoratedEditors = [];
-
-  for (const editor of editors) {
-    if (DECORATED_EDITORS.has(editor)) {
-      newDecoratedSet.add(editor);
-    } else {
-      notDecoratedEditors.push(editor);
+  const docInfo = documentInfoMap.get(doc);
+  if (!docInfo) {
+    return;
+  }
+  documentInfoMap.delete(doc);
+  for (const editor of vscode.window.visibleTextEditors) {
+    if (editor.document === doc) {
+      docInfo.undecorateEditor(editor);
+      decoratedEditors.delete(editor);
     }
   }
-  DECORATED_EDITORS = newDecoratedSet;
-
-  for (const editor of notDecoratedEditors) {
-    updateDecoration(editor);
+  if (docInfo.keywordConfiguration !== defaultKeywordConfiguration) {
+    docInfo.keywordConfiguration.dispose();
   }
 }
 
-function updateDecoration(editor: vscode.TextEditor) {
-  if (editor.document.languageId !== "markdown") {
+function onTextDocumentChanged(event: vscode.TextDocumentChangeEvent) {
+  if (event.contentChanges.length <= 0) {
     return;
   }
-
-  const keyword2ranges = new Map();
-  const lineCount = editor.document.lineCount;
-  for (let lineNumber = 0; lineNumber < lineCount; lineNumber++) {
-    const line = editor.document.lineAt(lineNumber).text;
-
-    let match = line.match(DECORATE_REGEX!);
-    if (match === null) {
+  const doc = event.document;
+  const docInfo = documentInfoMap.get(doc);
+  if (docInfo === undefined) {
+    return;
+  }
+  for (const change of event.contentChanges) {
+    if (!docInfo.hasMetadata() || docInfo.isMetadataAffected(change)) {
+      let { keywordConfiguration } = KeywordConfiguration.loadFromTextDocument(doc);
+      if (keywordConfiguration === null) {
+        keywordConfiguration = defaultKeywordConfiguration;
+      }
+      if (!docInfo.keywordConfiguration.equals(keywordConfiguration)) {
+        onCloseTextDocument(doc);
+        onOpenTextDocument(doc);
+        return;
+      }
+    }
+    if (!docInfo.isMainContentAffected(change)) {
       continue;
     }
-
-    const startCount = match[1].length;
-    const keyword = match[3];
-    let ranges = keyword2ranges.get(keyword);
-    if (ranges === undefined) {
-      ranges = [];
-      keyword2ranges.set(keyword, ranges);
+    docInfo.onDocChange(doc, change);
+  }
+  for (const editor of vscode.window.visibleTextEditors) {
+    if (editor.document === doc) {
+      docInfo.decorateEditor(editor);
+      decoratedEditors.add(editor);
     }
-    ranges.push(
-      new vscode.Range(
-        new vscode.Position(lineNumber, startCount),
-        new vscode.Position(lineNumber, startCount + keyword.length),
-      ),
-    );
   }
+}
 
-  for (const [keyword, decoration] of DECORATION_MAP) {
-    const ranges = keyword2ranges.get(keyword) ?? [];
-    editor.setDecorations(decoration, ranges);
+function onVisibleTextEditorsChanged(editors: readonly vscode.TextEditor[]) {
+  for (const editor of editors) {
+    if (decoratedEditors.has(editor)) {
+      continue;
+    }
+    const docInfo = documentInfoMap.get(editor.document);
+    if (docInfo) {
+      docInfo.decorateEditor(editor);
+      decoratedEditors.add(editor);
+    }
   }
-  DECORATED_EDITORS.add(editor);
 }

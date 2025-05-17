@@ -3,7 +3,7 @@
   "displayName": "Markdown TODO",
   "description": "A simple TODO management VSCode extension for Markdown files.",
   "publisher": "dfxyz",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "repository": {
     "type": "git",
     "url": "https://github.com/dfxyz/vsce-markdown-todo"
@@ -32,12 +32,18 @@
                 "description": "The keyword for a TODO state"
               },
               "color": {
-                "type": ["string", "null"],
+                "type": [
+                  "string",
+                  "null"
+                ],
                 "description": "The foreground color for the keyword. May be null.",
                 "default": null
               },
               "backgroundColor": {
-                "type": ["string", "null"],
+                "type": [
+                  "string",
+                  "null"
+                ],
                 "description": "The background color for the keyword. May be null.",
                 "default": null
               },
@@ -47,7 +53,9 @@
                 "default": true
               }
             },
-            "required": ["keyword"]
+            "required": [
+              "keyword"
+            ]
           },
           "default": [
             {
@@ -98,14 +106,20 @@
     "test": "vscode-test"
   },
   "devDependencies": {
-    "@types/vscode": "^1.99.0",
+    "@types/lodash": "^4.17.16",
     "@types/mocha": "^10.0.10",
     "@types/node": "20.x",
+    "@types/vscode": "^1.99.0",
     "@typescript-eslint/eslint-plugin": "^8.31.1",
     "@typescript-eslint/parser": "^8.31.1",
-    "eslint": "^9.25.1",
-    "typescript": "^5.8.3",
     "@vscode/test-cli": "^0.0.10",
-    "@vscode/test-electron": "^2.5.2"
+    "@vscode/test-electron": "^2.5.2",
+    "eslint": "^9.25.1",
+    "prettier": "^3.5.3",
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "lodash": "^4.17.21",
+    "yaml": "^2.7.1"
   }
 }
